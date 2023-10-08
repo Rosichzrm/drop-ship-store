@@ -1,3 +1,4 @@
+from _decimal import Decimal
 from django.contrib.auth.models import User
 from django.test import TestCase
 from django.utils import timezone
@@ -15,6 +16,7 @@ class TestDataBase(TestCase):
 
     def setUp(self):
         self.user = User.objects.get(username='root')
+        self.p = Product.objects.all().first()
 
     def test_user_exists(self):
         users = User.objects.all()
@@ -61,3 +63,59 @@ class TestDataBase(TestCase):
         cart.save()
         cart = Order.get_cart(self.user)
         self.assertEqual((timezone.now() - cart.creation_time).days, 0)
+
+    def test_recalculate_order_amount_after_changing_ordertime(self):
+
+        #1. Get order amount before any changing
+        cart = Order.get_cart(self.user)
+        self.assertEqual(cart.amount, Decimal(0))
+
+        #2. --------""-------- after adding item
+        i = OrderItem.objects.create(order=cart, product=self.p, price=2, quantity=2)
+        i = OrderItem.objects.create(order=cart, product=self.p, price=2, quantity=3)
+        cart = Order.get_cart(self.user)
+        self.assertEqual(cart.amount, Decimal(10))
+
+
+        #3. --------""-------- after deleting an item
+        i.delete()
+        cart = Order.get_cart(self.user)
+        self.assertEqual(cart.amount, Decimal(4))
+
+    def test_cart_status_changing_after_applying_make_order(self):
+        #1. Attempt to change the status for empty cart
+        cart = Order.get_cart(self.user)
+        cart.make_order()
+        self.assertEqual(cart.status, Order.STATUS_CART)
+
+        #2. Attempt to change the status for a non-empty cart
+        i = OrderItem.objects.create(order=cart, product=self.p, price=2, quantity=2)
+        cart.make_order()
+        self.assertEqual(cart.status, Order.STATUS_WAITING_FOR_PAYMENT)
+
+    def test_method_get_amount_of_unpaid_orders(self):
+        #1. Before creating cart
+        amount = Order.get_amount_of_unpaid_orders(self.user)
+        self.assertEqual(amount, Decimal(0))
+
+        #2. After creating cart
+        cart = Order.get_cart(self.user)
+        OrderItem.objects.create(order=cart, product=self.p, price=2, quantity=2)
+        amount = Order.get_amount_of_unpaid_orders(self.user)
+        self.assertEqual(amount, Decimal(0))
+
+        #3. After cart.make_order()
+        cart.make_order()
+        amount = Order.get_amount_of_unpaid_orders(self.user)
+        self.assertEqual(amount, Decimal(4))
+
+        #4. After order is paid
+        cart.status = Order.STATUS_PAID
+        cart.save()
+        amount = Order.get_amount_of_unpaid_orders(self.user)
+        self.assertEqual(amount, Decimal(0))
+
+        #5. After delete all orders
+        Order.objects.all().delete()
+        amount = Order.get_amount_of_unpaid_orders(self.user)
+        self.assertEqual(amount, Decimal(0))
